@@ -1,0 +1,12 @@
+# Core dependencies (pinned for reproducibility — §8.2)
+
+# M1 (monitor + storage)
+pytest>=8.0,<9.0
+pyyaml>=6.0,<7.0
+
+# M3 (RL environment + agent scaffolding)
+numpy>=1.26,<2.0
+gymnasium>=0.29,<1.0
+
+# M4 (PPO/SAC training via stable-baselines3; torch pulled as transitive dep)
+stable-baselines3>=2.3,<3.0

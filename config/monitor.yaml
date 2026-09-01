@@ -1,0 +1,10 @@
+# Monitor configuration
+monitor:
+  interval_sec: 1.0
+  db_path: data/monitor.db
+  duration_sec: null          # null = run forever; set to e.g. 60 for a timed run
+  sched_param_keys:
+    - kernel.sched_rr_timeslice_ms
+    - kernel.sched_rt_period_us
+    - kernel.sched_rt_runtime_us
+    - kernel.sched_cfs_bandwidth_slice_us

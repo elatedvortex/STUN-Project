@@ -1,0 +1,83 @@
+# Unified scheduler parameter registry configuration.
+#
+# This is the SINGLE SOURCE OF TRUTH for all tunable parameters (§5.1).
+# All modules (training, dashboard, safety) load from this file via
+# config/loader.py → build_registry_from_config().
+#
+# Adding or removing a parameter here is the ONLY change needed.
+
+scheduler:
+  params:
+    # ── CFS granularity (used by RL training) ──────────────────────────
+    - name: sched_min_granularity_ns
+      path: kernel.sched_min_granularity_ns
+      type: int
+      min_value: 100000
+      max_value: 100000000
+      description: CFS minimum preemption granularity (ns)
+
+    - name: sched_wakeup_granularity_ns
+      path: kernel.sched_wakeup_granularity_ns
+      type: int
+      min_value: 100000
+      max_value: 100000000
+      description: CFS wakeup granularity (ns)
+
+    # ── Round-Robin / RT scheduling ────────────────────────────────────
+    - name: sched_rr_timeslice_ms
+      path: kernel.sched_rr_timeslice_ms
+      type: int
+      min_value: 1
+      max_value: 2000
+      description: Round-Robin scheduler timeslice (ms)
+
+    - name: sched_rt_period_us
+      path: kernel.sched_rt_period_us
+      type: int
+      min_value: 1
+      max_value: 1000000
+      description: RT scheduling period (µs)
+
+    - name: sched_rt_runtime_us
+      path: kernel.sched_rt_runtime_us
+      type: int
+      min_value: -1
+      max_value: 1000000
+      description: "RT runtime within RT period (µs). -1 = unlimited"
+
+    # ── CFS bandwidth ─────────────────────────────────────────────────
+    - name: sched_cfs_bandwidth_slice_us
+      path: kernel.sched_cfs_bandwidth_slice_us
+      type: int
+      min_value: 1
+      max_value: 100000
+      description: CFS bandwidth slice per refill (µs)
+
+    # ── Feature toggles ───────────────────────────────────────────────
+    - name: sched_autogroup_enabled
+      path: kernel.sched_autogroup_enabled
+      type: int
+      min_value: 0
+      max_value: 1
+      description: "Auto-group tasks by session (0=off, 1=on)"
+
+    - name: sched_util_clamp_max
+      path: kernel.sched_util_clamp_max
+      type: int
+      min_value: 0
+      max_value: 1024
+      description: "Max CPU utilisation clamp for UCLAMP (0-1024)"
+
+    - name: sched_util_clamp_min
+      path: kernel.sched_util_clamp_min
+      type: int
+      min_value: 0
+      max_value: 1024
+      description: "Min CPU utilisation clamp for UCLAMP (0-1024)"
+
+    - name: sched_schedstats
+      path: kernel.sched_schedstats
+      type: int
+      min_value: 0
+      max_value: 1
+      description: "Enable scheduler statistics in /proc/schedstat (0=off, 1=on)"

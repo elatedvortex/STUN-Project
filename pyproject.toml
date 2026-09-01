@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "rl-scheduler-framework"
+version = "0.5.0"
+description = "Adaptive Reinforcement Learning Framework for Linux Scheduler Optimization"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "numpy>=1.26,<2.0",
+    "gymnasium>=0.29,<1.0",
+    "stable-baselines3>=2.3,<3.0",
+    "pyyaml>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "ruff>=0.4",
+]
+dashboard = [
+    "PyQt6>=6.5",
+]
+
+[tool.setuptools.packages.find]
+include = [
+    "benchmarks*",
+    "config*",
+    "core*",
+    "dashboard*",
+    "monitor*",
+    "rl*",
+    "safety*",
+    "scheduler*",
+    "scripts*",
+    "storage*",
+    "utils*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

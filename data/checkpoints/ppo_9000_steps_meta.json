@@ -1,0 +1,12 @@
+{
+  "num_timesteps": 9000,
+  "algorithm": "ppo",
+  "timestamp": "2026-08-29T17:41:01.498505+00:00",
+  "training_config": {
+    "total_timesteps": 10000,
+    "checkpoint_freq": 1000
+  },
+  "n_episodes": 450,
+  "mean_reward": 1.9944537733134349,
+  "std_reward": 0.15997217664329197
+}

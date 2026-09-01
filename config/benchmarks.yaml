@@ -1,0 +1,34 @@
+# Benchmark sweep configuration
+benchmarks:
+  db_path: data/benchmarks.db
+  repeats: 2                  # run each adapter this many times
+
+  adapters:
+    - name: stress-ng
+      enabled: true
+      kwargs:
+        timeout: 5
+        workers: 2
+
+    - name: sysbench
+      enabled: true
+      kwargs:
+        timeout: 5
+        threads: 2
+
+    - name: hackbench
+      enabled: true
+      kwargs:
+        groups: 1
+        loops: 100
+
+    - name: cyclictest
+      enabled: true           # rt-tests package is installed
+      tag: baseline
+      kwargs:
+        loops: 5000
+
+    - name: fio
+      enabled: false          # writes to disk — enable when appropriate
+      kwargs:
+        size: 10M
