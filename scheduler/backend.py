@@ -74,7 +74,8 @@ class SysctlBackend(SchedulerBackend):
         self._validate_path(path)
         try:
             subprocess.run(
-                ["sysctl", "-w", "%s=%s" % (path, value)],
+                (["sysctl"] if os.geteuid() == 0 else ["sudo", "-n", "sysctl"])
+                + ["-w", "%s=%s" % (path, value)],
                 capture_output=True,
                 text=True,
                 check=True,

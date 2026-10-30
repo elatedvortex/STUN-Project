@@ -37,7 +37,7 @@ from gymnasium import spaces
 from monitor.collector import Monitor
 from monitor.types import SystemSnapshot
 from scheduler import SchedulerController, ParameterRegistry
-from scheduler.exceptions import ValidationError
+from scheduler.exceptions import ValidationError, RecoveryError
 from safety.watchdog import Watchdog
 from benchmarks.base import BenchmarkRunner
 from rl.state import StateBuilder
@@ -109,6 +109,7 @@ class LinuxSchedulerEnv(gymnasium.Env):
         self._last_reward: float = 0.0
         self._last_action: int | np.ndarray = 0
         self._last_benchmark_result = None
+        self._baseline = None
 
         # Observation: system state + prev_action (1-hot or raw) + prev_reward (§2.2)
         n_params = len(registry.get_all())
@@ -144,15 +145,12 @@ class LinuxSchedulerEnv(gymnasium.Env):
         self._last_action = 0
         self._last_benchmark_result = None
 
-        # Attempt rollback to restore previous baseline before episode start
-        try:
-            self._controller.rollback()
-        except Exception:
-            # Rollback stack may be empty on the very first episode — safe to ignore
-            pass
-
-        # Reset action mapper internal state (midpoint of each param range)
-        self._action_mapper.reset_state()
+        self._check_watchdog()
+        if self._baseline is None:
+            self._baseline = self._controller.read_state()
+        else:
+            self._controller.restore_state(self._baseline)
+        self._action_mapper.reset_state(self._controller.read_state())
 
         snapshot = self._monitor.read_snapshot()
         obs = self._build_obs(snapshot)
@@ -161,12 +159,22 @@ class LinuxSchedulerEnv(gymnasium.Env):
     def step(
         self, action: int | np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        return self._step(action)
+
+    def measure_baseline(self):
+        """Measure without writing, including when continuous zero is not a noop."""
+        return self._step(None)
+
+    def _step(self, action):
+        self._check_watchdog()
+        if self._baseline is None:
+            raise RuntimeError("Call reset() before step()")
         self._step_count += 1
         rollback_triggered = False
         params_applied: Dict[str, Any] = {}
 
         # Decode action → parameter dict ({} for no-op)
-        params = self._action_mapper.decode(action)
+        params = {} if action is None else self._action_mapper.decode(action)
 
         # Apply parameters — catch validation errors specifically (§7.1)
         if params:
@@ -176,6 +184,9 @@ class LinuxSchedulerEnv(gymnasium.Env):
             except ValidationError as exc:
                 logger.debug("Validation error in apply_parameters: %s", exc)
                 rollback_triggered = True
+                self._action_mapper.reset_state(self._controller.read_state())
+            except RecoveryError:
+                raise
             except Exception as exc:
                 # Unexpected errors should be logged at WARNING, not silently swallowed
                 logger.warning(
@@ -183,6 +194,7 @@ class LinuxSchedulerEnv(gymnasium.Env):
                     type(exc).__name__, exc,
                 )
                 rollback_triggered = True
+                self._action_mapper.reset_state(self._controller.read_state())
 
         # Run benchmark to compute reward signal (§2.3: skip if not on interval)
         if self._step_count % self._benchmark_interval == 0 or self._last_benchmark_result is None:
@@ -205,6 +217,8 @@ class LinuxSchedulerEnv(gymnasium.Env):
         else:
             result = self._last_benchmark_result
 
+        # A timeout is fatal: a completed benchmark must not revive the timer.
+        self._check_watchdog()
         # Keep watchdog alive
         if self._watchdog is not None:
             self._watchdog.ping()
@@ -215,7 +229,7 @@ class LinuxSchedulerEnv(gymnasium.Env):
 
         # Store for next step's augmented observation (§2.2)
         self._last_reward = reward
-        self._last_action = action
+        self._last_action = 0 if action is None else action
 
         obs = self._build_obs(snapshot)
 
@@ -239,6 +253,15 @@ class LinuxSchedulerEnv(gymnasium.Env):
     def render(self) -> None:
         pass  # no rendering in M3; dashboard is M5
 
+    def _check_watchdog(self) -> None:
+        if self._watchdog is not None and self._watchdog.timed_out:
+            raise RecoveryError("Watchdog timed out; stop training and restore baseline")
+
+    def close(self) -> None:
+        """Restore all values captured at the first reset; propagate failures."""
+        if self._baseline is not None:
+            self._controller.restore_state(self._baseline)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -249,14 +272,14 @@ class LinuxSchedulerEnv(gymnasium.Env):
         extra = np.zeros(self._extra_obs_dim, dtype=np.float32)
 
         # Encode previous action
-        if isinstance(self._last_action, (int, np.integer)):
+        if isinstance(self.action_space, spaces.Discrete):
             # One-hot for discrete
             idx = int(self._last_action)
             if 0 <= idx < self._extra_obs_dim - 1:
                 extra[idx] = 1.0
         else:
             # Raw continuous action (clipped to [0,1] range)
-            a = np.asarray(self._last_action, dtype=np.float32)
+            a = np.atleast_1d(np.asarray(self._last_action, dtype=np.float32))
             a = (a + 1.0) / 2.0  # map [-1,1] -> [0,1]
             n = min(len(a), self._extra_obs_dim - 1)
             extra[:n] = a[:n]

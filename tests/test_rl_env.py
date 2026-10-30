@@ -168,6 +168,21 @@ def _make_env(
 # ---------------------------------------------------------------------------
 
 class TestStateBuilder:
+    def test_sysctl_paths_populate_parameter_observations(self):
+        builder = StateBuilder(_make_registry())
+        obs = builder.build(_make_snapshot())
+        assert obs[6] == pytest.approx(0.03)
+        assert obs[7] == pytest.approx(0.04)
+
+    def test_profile_distance_accepts_sysctl_paths(self):
+        from workload.context import _profile_distance
+        distance = _profile_distance(
+            {"kernel.sched_min_granularity_ns": 100_000},
+            {"kernel.sched_min_granularity_ns": 100_000_000},
+            _make_registry(),
+        )
+        assert distance == pytest.approx(0.5)
+
     def test_state_builder_shape(self):
         reg = _make_registry()
         sb = StateBuilder(reg)
@@ -327,6 +342,51 @@ class TestRewardShaper:
 # ---------------------------------------------------------------------------
 
 class TestLinuxSchedulerEnv:
+    def test_multiple_actions_reset_and_close_restore_original_baseline(self):
+        env, backend = _make_env(episode_steps=10)
+        original = dict(backend.state)
+        env.reset()
+        env.step(1)
+        env.step(2)
+        env.step(1)
+        assert backend.state != original
+        env.reset()
+        assert backend.state == original
+        env.step(2)
+        env.close()
+        assert backend.state == original
+
+    def test_first_increment_uses_kernel_value(self):
+        env, backend = _make_env()
+        env.reset()
+        env.step(1)
+        assert int(backend.state["kernel.sched_min_granularity_ns"]) == 3_000_000 + 4_995_000
+
+    def test_reset_propagates_restore_failure(self):
+        env, _ = _make_env()
+        env.reset()
+        env._controller.restore_state = MagicMock(side_effect=RuntimeError("restore failed"))
+        with pytest.raises(RuntimeError, match="restore failed"):
+            env.reset()
+
+    def test_timeout_aborts_before_and_after_benchmark(self):
+        from safety.watchdog import Watchdog
+        from scheduler.exceptions import RecoveryError
+        env, _ = _make_env()
+        watchdog = Watchdog(lambda: None)
+        env._watchdog = watchdog
+        env.reset()
+
+        def timeout(**kwargs):
+            watchdog._timed_out = True
+            return BenchmarkResult("fake", "cpu", True, 1.0, True)
+
+        env._benchmark.run = timeout
+        with pytest.raises(RecoveryError, match="Watchdog"):
+            env.step(1)
+        with pytest.raises(RecoveryError, match="Watchdog"):
+            env.step(1)
+
     def test_env_reset_returns_correct_obs_shape(self):
         env, _ = _make_env()
         obs, info = env.reset()
@@ -411,4 +471,4 @@ class TestLinuxSchedulerEnv:
         """gymnasium.utils.env_checker.check_env must pass."""
         from gymnasium.utils.env_checker import check_env
         env, _ = _make_env(episode_steps=3)
-        check_env(env, warn=True, skip_render_check=True)
+        check_env(env, skip_render_check=True)

@@ -1,7 +1,7 @@
 import json
 import os
-import stat
 import logging
+import tempfile
 from pathlib import Path
 from typing import Dict, Any
 
@@ -33,15 +33,27 @@ class CheckpointManager:
     def save_checkpoint(self, state: Dict[str, Any]) -> None:
         """Atomically write checkpoint with restrictive permissions."""
         try:
-            tmp_path = self.checkpoint_path + ".tmp"
-            with open(tmp_path, 'w') as f:
-                json.dump(state, f, indent=2)
-            # Set owner-only read/write before moving into place (§6.2)
-            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
-            os.replace(tmp_path, self.checkpoint_path)
+            # mkstemp creates an owner-only file before any state is written.
+            fd, tmp_path = tempfile.mkstemp(dir=Path(self.checkpoint_path).parent,
+                                             prefix=".safety-checkpoint-")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(state, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.checkpoint_path)
+                directory = os.open(Path(self.checkpoint_path).parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
             logger.debug("Checkpoint saved to %s", self.checkpoint_path)
         except IOError as e:
             logger.error("Failed to save checkpoint: %s", e)
+            raise
 
     def load_checkpoint(self) -> Dict[str, Any]:
         if not os.path.exists(self.checkpoint_path):

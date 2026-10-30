@@ -18,7 +18,7 @@ class BenchmarkRunner(abc.ABC):
         """Run the benchmark and return normalized result."""
         pass
 
-    def _execute_cmd(self, cmd: List[str]) -> subprocess.CompletedProcess:
+    def _execute_cmd(self, cmd: List[str], timeout: int = 300) -> subprocess.CompletedProcess:
         """Helper to run a subprocess command safely."""
         logger.debug(f"Running benchmark command: {' '.join(cmd)}")
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)

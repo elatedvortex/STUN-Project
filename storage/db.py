@@ -79,6 +79,13 @@ CREATE INDEX IF NOT EXISTS idx_config_param     ON applied_config(param_name);
 """
 
 
+def _is_better(candidate: Dict[str, Any], current: Dict[str, Any]) -> bool:
+    """Return True if *candidate* outranks *current* as a benchmark score."""
+    if candidate["score_is_higher_better"]:
+        return candidate["score"] > current["score"]
+    return candidate["score"] < current["score"]
+
+
 class StorageBackend:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path_str = str(db_path)
@@ -100,8 +107,11 @@ class StorageBackend:
             yield self._mem_conn
             self._mem_conn.commit()
         else:
-            conn = sqlite3.connect(self._db_path_str)
+            # timeout=10: wait up to 10 s if another writer holds the lock
+            conn = sqlite3.connect(self._db_path_str, timeout=10)
             try:
+                # WAL mode allows concurrent readers alongside one writer
+                conn.execute("PRAGMA journal_mode=WAL")
                 yield conn
                 conn.commit()
             finally:
@@ -219,6 +229,51 @@ class StorageBackend:
                 ).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM benchmark_result").fetchone()[0]
 
+    def best_benchmark_for_category(
+        self,
+        category: str,
+        *,
+        limit: int = 500,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the best historical benchmark row for a workload category.
+
+        Matches rows where ``metrics_json.primary_category`` equals *category*
+        or where ``workload_type`` matches the category's benchmark mapping.
+        Returns a dict with keys: score, score_is_higher_better, sched_params,
+        primary_category, workload_type, name, timestamp.
+        """
+        from workload.categories import CATEGORY_TO_BENCHMARK_TYPE
+
+        target_type = CATEGORY_TO_BENCHMARK_TYPE.get(category, "mixed")
+        rows = self.recent_benchmark_results(limit=limit)
+        best: Optional[Dict[str, Any]] = None
+
+        for row in rows:
+            if not row["success"]:
+                continue
+            metrics = json.loads(row["metrics_json"] or "{}")
+            row_category = metrics.get("primary_category")
+            matches = (
+                row_category == category
+                or row["workload_type"] == target_type
+            )
+            if not matches:
+                continue
+
+            candidate = {
+                "score": float(row["score"]),
+                "score_is_higher_better": bool(row["score_is_higher_better"]),
+                "sched_params": metrics.get("sched_params") or {},
+                "primary_category": row_category or category,
+                "workload_type": row["workload_type"],
+                "name": row["name"],
+                "timestamp": row["timestamp"],
+            }
+            if best is None or _is_better(candidate, best):
+                best = candidate
+
+        return best
+
     # ------------------------------------------------------------------
     # Applied config audit trail
     # ------------------------------------------------------------------
@@ -274,3 +329,89 @@ class StorageBackend:
     def count_applied_configs(self) -> int:
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM applied_config").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Sweep helpers
+    # ------------------------------------------------------------------
+
+    def best_params_for_workload(
+        self,
+        workload_type: str,
+        *,
+        tag_prefix: str = "sweep",
+        limit: int = 2000,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the scheduler param dict from the best sweep run for *workload_type*.
+
+        Matches rows where ``tag`` starts with *tag_prefix* (default ``"sweep"``)
+        and ``workload_type`` equals the argument.  Picks the single row with the
+        best ``score`` (respecting ``score_is_higher_better``).
+
+        Returns a dict with keys ``sched_params`` (dict), ``score``, ``name``,
+        ``timestamp``, or *None* if no matching row exists.
+        """
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT * FROM benchmark_result
+                WHERE workload_type = ?
+                  AND success = 1
+                  AND tag LIKE ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (workload_type, f"{tag_prefix}%", limit),
+            ).fetchall()
+
+        if not rows:
+            return None
+
+        best_row = None
+        best_score: Optional[float] = None
+        higher_is_better = True
+
+        for row in rows:
+            metrics = json.loads(row["metrics_json"] or "{}")
+            if tag_prefix == "sweep" and metrics.get("dry_run", False):
+                continue
+            sched_params = metrics.get("sched_params") or {}
+            if not sched_params:
+                continue
+            score = float(row["score"])
+            hib = bool(row["score_is_higher_better"])
+            if best_score is None:
+                best_row = row
+                best_score = score
+                higher_is_better = hib
+            elif hib and score > best_score:
+                best_row = row
+                best_score = score
+            elif not hib and score < best_score:
+                best_row = row
+                best_score = score
+
+        if best_row is None:
+            return None
+
+        metrics = json.loads(best_row["metrics_json"] or "{}")
+        return {
+            "sched_params": metrics.get("sched_params") or {},
+            "score": float(best_row["score"]),
+            "score_is_higher_better": bool(best_row["score_is_higher_better"]),
+            "name": best_row["name"],
+            "workload_type": best_row["workload_type"],
+            "timestamp": best_row["timestamp"],
+        }
+
+    def list_sweep_workload_types(self, tag_prefix: str = "sweep") -> List[str]:
+        """Return distinct workload types that have at least one successful sweep row."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT workload_type FROM benchmark_result
+                WHERE success = 1 AND tag LIKE ?
+                """,
+                (f"{tag_prefix}%",),
+            ).fetchall()
+        return [r[0] for r in rows]

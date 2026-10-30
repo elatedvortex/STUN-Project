@@ -191,3 +191,26 @@ def test_snapshot_fields_default_to_none_when_no_sources() -> None:
     assert snapshot.mem_util_pct is None
     assert snapshot.available_sources == ()
     assert isinstance(snapshot, SystemSnapshot)
+
+
+def test_process_sampling_ranks_interval_activity_and_handles_pid_reuse(monkeypatch):
+    from monitor.sources import ProcessSampleSource
+    frames = {"1": (1000, 10), "2": (10, 20)}
+
+    def read_stat(path):
+        pid = str(path).split("/")[2]
+        ticks, start = frames[pid]
+        fields = ["0"] * 20
+        fields[0], fields[11], fields[17], fields[19] = "R", str(ticks), "1", str(start)
+        return f"{pid} (worker) " + " ".join(fields)
+
+    monkeypatch.setattr("monitor.sources.os.listdir", lambda path: ["1", "2"])
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    source = ProcessSampleSource(sample_size=1)
+    assert source.read()["processes"][0]["cpu_ticks_delta"] == 0
+    frames["2"] = (40, 20)
+    result = source.read()["processes"][0]
+    assert result["pid"] == 2
+    assert result["cpu_ticks_delta"] == 30
+    frames["2"] = (50, 999)  # same PID, different process
+    assert all(row["cpu_ticks_delta"] == 0 for row in source.read()["processes"])

@@ -265,14 +265,18 @@ class NumaSource(MetricSource):
 
 
 class ProcessSampleSource(MetricSource):
-    """Samples up to `sample_size` processes from /proc/[pid]/stat. Sampling
-    (not enumerating every process every tick) keeps this source cheap
-    enough to run at the main sampling interval.
+    """Scan /proc counters and return up to `sample_size` busiest processes.
+
+    The first sample and newly seen processes have zero interval ticks.
+    Reading cost scales with process count; only the returned data is capped.
     """
     name = "process_sample"
 
     def __init__(self, sample_size: int = 25) -> None:
         self._sample_size = sample_size
+        if sample_size < 1:
+            raise ValueError("sample_size must be positive")
+        self._previous_ticks = {}
 
     def is_available(self) -> bool:
         return Path("/proc").exists()
@@ -285,7 +289,10 @@ class ProcessSampleSource(MetricSource):
             logger.warning("process_sample: listdir failed: %s", exc)
             return {}
 
-        for pid in pids[: self._sample_size]:
+        current_ticks = {}
+        # Rank current activity before capping the returned sample. Taking the
+        # first directory entries permanently hid newly busy processes.
+        for pid in pids:
             stat_path = Path(f"/proc/{pid}/stat")
             try:
                 raw = stat_path.read_text()
@@ -298,6 +305,11 @@ class ProcessSampleSource(MetricSource):
                 utime = int(rest[11])
                 stime = int(rest[12])
                 num_threads = int(rest[17])
+                starttime = int(rest[19])
+                identity = (int(pid), starttime)
+                ticks = utime + stime
+                delta = max(0, ticks - self._previous_ticks.get(identity, ticks))
+                current_ticks[identity] = ticks
                 procs.append(
                     {
                         "pid": int(pid),
@@ -306,6 +318,8 @@ class ProcessSampleSource(MetricSource):
                         "utime": utime,
                         "stime": stime,
                         "num_threads": num_threads,
+                        "starttime": starttime,
+                        "cpu_ticks_delta": delta,
                     }
                 )
             except (OSError, ValueError, IndexError):
@@ -313,7 +327,9 @@ class ProcessSampleSource(MetricSource):
                 # both routine, not worth logging at anything above debug
                 continue
 
-        return {"processes": tuple(procs)} if procs else {}
+        self._previous_ticks = current_ticks
+        procs.sort(key=lambda row: (-row["cpu_ticks_delta"], row["pid"]))
+        return {"processes": tuple(procs[:self._sample_size])} if procs else {}
 
 
 class PerfStatSource(MetricSource):

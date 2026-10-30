@@ -14,12 +14,15 @@ not zero" convention while keeping the obs space simple.
 from __future__ import annotations
 
 import os
-from typing import Optional
-
 import numpy as np
+
+from typing import TYPE_CHECKING, Optional
 
 from monitor.types import SystemSnapshot
 from scheduler.registry import ParameterRegistry
+
+if TYPE_CHECKING:
+    from workload.context import WorkloadContextBuilder
 
 
 # Upper bounds used for normalisation
@@ -76,7 +79,9 @@ class StateBuilder:
         sched_params = snapshot.sched_params or {}
         for i, name in enumerate(self._param_names):
             meta = self._registry.get(name)
-            raw = float(sched_params.get(name, 0.0))
+            # Monitor sources use sysctl paths; accept logical names for legacy
+            # snapshots too. Looking up only names silently zeroed real inputs.
+            raw = float(sched_params.get(meta.path, sched_params.get(name, 0.0)))
             max_val = float(meta.max_value) if meta.max_value else 1.0
             obs[self._FIXED_FIELDS + i] = _clip(raw / max_val if max_val != 0 else 0.0)
 

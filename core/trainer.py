@@ -109,14 +109,17 @@ class Trainer:
         checkpoint_freq: int = 1_000,
         eval_episodes: int = 5,
         progress_bar: bool = False,
+        callbacks: Optional[list] = None,
     ) -> TrainingResult:
         """Train for `total_timesteps` steps, checkpoint every `checkpoint_freq`.
 
         Returns a TrainingResult with post-training evaluation stats.
         """
+        from stable_baselines3.common.callbacks import CallbackList
+
         t_start = time.monotonic()
 
-        callback = SchedulerCheckpointCallback(
+        ckpt_callback = SchedulerCheckpointCallback(
             save_freq=checkpoint_freq,
             save_path=self._checkpoint_dir,
             name_prefix=self._algorithm_name,
@@ -128,10 +131,14 @@ class Trainer:
             verbose=1,
         )
 
+        all_callbacks = [ckpt_callback]
+        if callbacks:
+            all_callbacks.extend(callbacks)
+
         logger.info("Training %s for %d timesteps...", self._algorithm_name, total_timesteps)
         self._model.learn(
             total_timesteps=total_timesteps,
-            callback=callback,
+            callback=CallbackList(all_callbacks),
             progress_bar=progress_bar,
             reset_num_timesteps=False,
         )

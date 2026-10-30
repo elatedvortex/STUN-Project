@@ -34,6 +34,7 @@ from scheduler import (
     SchedulerController, SchedulerBackend,
 )
 from safety import SecondaryValidator, CheckpointManager
+from safety.session import TrainingSession
 from rl.env import LinuxSchedulerEnv
 from core.trainer import Trainer
 from config.loader import build_registry_from_config
@@ -57,6 +58,9 @@ class _DryRunBackend(SchedulerBackend):
 
 
 class _DryRunMonitor:
+    def __init__(self, backend=None):
+        self._backend = backend
+
     def read_snapshot(self):
         import random
         return SystemSnapshot(
@@ -64,6 +68,8 @@ class _DryRunMonitor:
             cpu_util_pct=45.0 + random.gauss(0, 5),
             load_avg_1=1.2, load_avg_5=1.0,
             mem_util_pct=35.0, ctxt_switches_delta=50_000, runnable_procs=3,
+            sched_params=({path: float(value) for path, value in self._backend.state.items()}
+                          if self._backend is not None else {}),
         )
 
 
@@ -110,6 +116,12 @@ def main():
     parser.add_argument("--checkpoint-dir", default="data/checkpoints")
     parser.add_argument("--eval-episodes", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--watchdog-timeout", type=float, default=120.0,
+                        help="Maximum seconds between completed steps (include benchmark and model updates)")
+    parser.add_argument("--safety-checkpoint", default=None)
+    parser.add_argument("--recover", action="store_true", help="Restore a saved baseline and exit")
+    parser.add_argument("--supervised", action="store_true",
+                        help="Use a parent process to attempt checkpoint recovery after child death")
     parser.add_argument("--load", default=None, help="Resume from checkpoint .zip")
     parser.add_argument("--config", default="config/scheduler.yaml",
                         help="Path to scheduler YAML config (§5.1)")
@@ -135,31 +147,26 @@ def main():
 
     # ── Safety module wiring (§1.1, §1.2, §1.4) ─────────────────────
     secondary_validator = SecondaryValidator()
-    checkpoint_mgr = CheckpointManager()
+    checkpoint_path = args.safety_checkpoint or (
+        str(Path(args.checkpoint_dir) / "dry_run_safety_checkpoint.json")
+        if args.dry_run else "data/safety_checkpoint.json"
+    )
+    checkpoint_mgr = CheckpointManager(checkpoint_path)
 
     # ── Backend selection (§8.1 — removed `or True` hack) ────────────
     if args.dry_run:
         log.info("Using dry-run backend (no real sysctl writes)")
         backend = _DryRunBackend(registry)
-        monitor = _DryRunMonitor()
+        monitor = _DryRunMonitor(backend)
         benchmark = _DryRunBenchmark(backend)
     else:
         log.info("Using REAL sysctl backend — requires root / CAP_SYS_ADMIN")
         from scheduler.backend import SysctlBackend
         backend = SysctlBackend()
-        monitor = Monitor(sources=default_sources())
+        monitor = Monitor(sources=default_sources(
+            sched_param_keys=tuple(meta.path for meta in registry.get_all())))
         monitor.check_capabilities()
         benchmark = StressNgAdapter()
-
-    # ── Save pre-training kernel state checkpoint (§1.2) ──────────────
-    pre_training_state = {}
-    for p in registry.get_all():
-        try:
-            pre_training_state[p.path] = backend.read(p.path)
-        except Exception:
-            log.warning("Could not read pre-training value for %s", p.path)
-    checkpoint_mgr.save_checkpoint(pre_training_state)
-    log.info("Pre-training checkpoint saved (%d params)", len(pre_training_state))
 
     # ── Controller with full safety pipeline (§1.1, §3.1) ────────────
     controller = SchedulerController(
@@ -167,53 +174,72 @@ def main():
         RollbackStack(), ProfileStore(),
         secondary_validator=secondary_validator,
     )
-    env = LinuxSchedulerEnv(
-        controller=controller, monitor=monitor, benchmark=benchmark,
-        registry=registry, episode_steps=20, action_mode=args.action_mode,
-    )
+    session = TrainingSession(controller, checkpoint_mgr, args.watchdog_timeout)
+    if args.supervised and not args.recover:
+        from safety.supervisor import run_supervised
+        if Path(checkpoint_path).exists():
+            raise RuntimeError("Recover the existing checkpoint before starting supervised training")
 
-    checkpoint_dir = Path(args.checkpoint_dir)
+        def recover_child():
+            if Path(checkpoint_path).exists():
+                log.warning("Child left a recovery checkpoint; restoring saved baseline")
+                session.recover_saved()
 
-    # SB3 algo kwargs
-    algo_kwargs = {}
-    if args.algorithm == "ppo":
-        algo_kwargs = {"n_steps": 256, "batch_size": 64, "n_epochs": 4}
-    elif args.algorithm == "sac":
-        algo_kwargs = {"learning_starts": 256, "batch_size": 64}
+        command = [sys.executable, str(Path(__file__).resolve()),
+                   *(argument for argument in sys.argv[1:] if argument != "--supervised")]
+        status = run_supervised(command, recover_child)
+        raise SystemExit(128 - status if status < 0 else status)
+    if args.recover:
+        session.recover_saved()
+        log.info("Saved baseline restored and verified")
+        return
 
-    if args.load:
-        log.info("Resuming from %s", args.load)
-        trainer = Trainer.load(args.load, env, algorithm=args.algorithm)
-    else:
-        trainer = Trainer(
-            env, algorithm=args.algorithm,
-            checkpoint_dir=checkpoint_dir,
-            **algo_kwargs,
+    with session:
+        env = LinuxSchedulerEnv(
+            controller=controller, monitor=monitor, benchmark=benchmark,
+            registry=registry, episode_steps=20, action_mode=args.action_mode,
+            watchdog=session.watchdog,
         )
 
-    log.info("Starting training: %s, %d timesteps", args.algorithm, args.timesteps)
-    result = trainer.train(
-        total_timesteps=args.timesteps,
-        checkpoint_freq=args.checkpoint_freq,
-        eval_episodes=args.eval_episodes,
-    )
+        checkpoint_dir = Path(args.checkpoint_dir)
 
-    # Save final model
-    final_path = checkpoint_dir / f"{args.algorithm}_final"
-    trainer.save(final_path)
+        # SB3 algo kwargs
+        algo_kwargs = {}
+        if args.algorithm == "ppo":
+            algo_kwargs = {"n_steps": 256, "batch_size": 64, "n_epochs": 4}
+        elif args.algorithm == "sac":
+            algo_kwargs = {"learning_starts": 256, "batch_size": 64}
 
-    print("\n--- Training Summary ---")
-    print(f"  algorithm        {result.algorithm}")
-    print(f"  timesteps        {result.total_timesteps}")
-    print(f"  elapsed          {result.elapsed_sec:.1f}s")
-    print(f"  mean_reward      {result.mean_reward:.4f}")
-    print(f"  std_reward       {result.std_reward:.4f}")
-    print(f"  checkpoints      {result.checkpoint_dir}")
-    print(f"  final model      {final_path}.zip")
+        if args.load:
+            log.info("Resuming from %s", args.load)
+            trainer = Trainer.load(args.load, env, algorithm=args.algorithm, checkpoint_dir=checkpoint_dir)
+        else:
+            trainer = Trainer(
+                env, algorithm=args.algorithm,
+                checkpoint_dir=checkpoint_dir,
+                **algo_kwargs,
+            )
 
-    # ── Cleanup: clear safety checkpoint on clean exit ────────────────
-    checkpoint_mgr.clear_checkpoint()
-    log.info("Safety checkpoint cleared (clean exit)")
+        log.info("Starting training: %s, %d timesteps", args.algorithm, args.timesteps)
+        result = trainer.train(
+            total_timesteps=args.timesteps,
+            checkpoint_freq=args.checkpoint_freq,
+            eval_episodes=args.eval_episodes,
+        )
+
+        # Save final model
+        final_path = checkpoint_dir / f"{args.algorithm}_final"
+        trainer.save(final_path)
+
+        print("\n--- Training Summary ---")
+        print(f"  algorithm        {result.algorithm}")
+        print(f"  timesteps        {result.total_timesteps}")
+        print(f"  elapsed          {result.elapsed_sec:.1f}s")
+        print(f"  mean_reward      {result.mean_reward:.4f}")
+        print(f"  std_reward       {result.std_reward:.4f}")
+        print(f"  checkpoints      {result.checkpoint_dir}")
+        print(f"  final model      {final_path}.zip")
+
 
 
 if __name__ == "__main__":

@@ -36,12 +36,14 @@ def _build_controller(registry):
     from scheduler.rollback import RollbackStack
     from scheduler.validator import Validator
     from scheduler.writer import Writer
+    from safety.validator import SecondaryValidator
     return SchedulerController(
         registry=registry,
         validator=Validator(registry),
         writer=Writer(registry),
         rollback_stack=RollbackStack(),
         profile_store=ProfileStore(),
+        secondary_validator=SecondaryValidator(),
     )
 
 

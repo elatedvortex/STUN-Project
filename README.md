@@ -1,6 +1,14 @@
 # Adaptive Reinforcement Learning Framework for Linux Scheduler Optimisation
 
-A production-grade, safety-constrained framework that uses reinforcement learning (PPO/SAC via Stable-Baselines3) to autonomously tune Linux kernel scheduler parameters and optimise system throughput or latency.
+An experimental framework for monitoring Linux systems and exploring scheduler
+parameter tuning through PPO/SAC (Stable-Baselines3), parameter sweeps, and
+workload-based configuration selection. Real performance benefits and production
+safety require further validation; this repository does not establish them.
+
+The headless **live tuner selects configurations from sweep results**. It does
+not run PPO/SAC inference. RL training is a separate path in `scripts/run_training.py`.
+See [evaluation and recovery](docs/EVALUATION.md) for measurement procedures,
+limitations, and the status of historical presentation figures.
 
 ---
 
@@ -64,7 +72,7 @@ A production-grade, safety-constrained framework that uses reinforcement learnin
 | `dashboard/`     | M1–M4     | PyQt6 live performance dashboard |
 | `config/`        | M1+       | YAML-driven experiment configuration |
 | `scripts/`       | M1–M4     | Entry-point scripts for each milestone |
-| `tests/`         | M1–M4     | 67 unit tests (all passing, no root required) |
+| `tests/`         | M1–M4     | Unit and failure-injection tests (no root required) |
 
 ---
 
@@ -80,37 +88,30 @@ pip install -r requirements.txt
 pip install PyQt6 pyqtgraph
 ```
 
-### 2. Run the live monitor
+### 2. Launch the dashboard (includes AI Training Auto-Tuner)
 
 ```bash
-python3 scripts/run_monitor.py --duration 30 --interval 1.0 --db data/monitor.db -v
+python3 dashboard/app.py
 ```
+*Note: The new Auto-Tuner & Sweep panel is available in the dashboard. Use it to run coordinate descent parameter sweeps and view real-time training score curves.*
 
-### 3. Launch the dashboard
+### 3. Run the Live Tuner Daemon (Headless)
 
 ```bash
-python3 scripts/run_dashboard.py
-# With root for live sysctl writes:
-sudo python3 scripts/run_dashboard.py --with-scheduler
+python3 scripts/run_live_tuner.py --sweep-db data/sweep.db -v
 ```
 
-### 4. Run all benchmarks
+### 4. Run a Parameter Sweep (Headless)
 
 ```bash
-python3 scripts/run_benchmarks.py --db data/benchmarks.db -v
+python3 scripts/run_sweep.py --workload gaming --steps 5 --db data/sweep.db
 ```
 
-### 5. Demo the scheduler controller
-
-```bash
-python3 scripts/run_scheduler.py
-```
-
-### 6. Run the test suite
+### 5. Run the test suite
 
 ```bash
 python3 -m pytest tests/ -v
-# 67 tests, ~7 seconds, no root, no kernel dependency
+# No root or live kernel writes required
 ```
 
 ---
@@ -139,46 +140,58 @@ See [`config/`](config/) for example files and the [config loader docs](docs/CON
 
 ---
 
-## Safety Design
+## Recovery and safety
 
-The framework applies a **defence-in-depth** approach before any kernel parameter is touched:
+Parameter writes pass registry validation and, when supplied, the independent
+secondary validator. Each write is read back. The controller serialises its
+operations, restores failed transactions, retains failed recovery states for
+retry, and blocks further tuning after a recovery failure.
 
-```
-ActionMapper.decode()
-    │ (raw action → param dict)
-    ▼
-Validator.validate()          ← type check + min/max bounds from ParameterRegistry
-    │
-    ▼
-SecondaryValidator.validate() ← independent hardcoded hard limits (safety belt)
-    │
-    ▼
-Writer.write_and_verify()     ← write sysctl + readback confirms kernel accepted it
-    │
-    ▼
-RollbackStack.push()          ← previous state saved before every write
-    │
-Watchdog thread               ← forces rollback if agent hangs > timeout_sec
-```
+RL episodes capture their initial baseline, restore all registered parameters at
+reset/close, and seed relative actions from actual readbacks. The training, sweep and live-tuner CLIs persist a baseline checkpoint, runs a watchdog, and restores on success,
+exceptions, Ctrl-C, or SIGTERM. Unresolved checkpoints block new training runs.
+Live sessions also hold a host lease against cooperating controllers and validate
+known RT/uclamp parameter relationships. `--supervised` enables a surviving parent
+to attempt recovery if the training child dies.
 
-No write reaches the kernel without passing all three validation layers. Every successful write is immediately read back to confirm the kernel accepted the value.
-
----
-
-## Test Coverage
-
-```
-tests/test_monitor.py       — 11 tests  (M1: proc sources, collector, snapshot)
-tests/test_scheduler.py     —  9 tests  (M2: registry, validator, writer, controller)
-tests/test_safety.py        —  3 tests  (M2: secondary validator, watchdog, checkpoint)
-tests/test_benchmarks.py    —  6 tests  (M3: all 5 benchmark adapters)
-tests/test_rl_env.py        — 25 tests  (M3: StateBuilder, ActionMapper, RewardShaper, Env)
-tests/test_trainer.py       — 13 tests  (M4: Trainer init/train/save/load/evaluate)
-                              ─────────
-                              67 total  (all passing, ~7 s)
+```bash
+python scripts/run_training.py --dry-run --timesteps 256 --eval-episodes 1 \
+  --checkpoint-dir /tmp/scheduler-training
+# Recover an interrupted live session using the same config and parameter subset:
+python scripts/run_training.py --recover --config config/scheduler.yaml
 ```
 
-All tests use fakes/stubs — **no root, no real kernel, no subprocess calls** reach the host.
+Writes remain sequential kernel operations. A thread watchdog cannot recover from
+process death or kernel hangs; persistent checkpoints support explicit recovery.
+Use an isolated test host for live experiments. Read the
+[recovery boundaries](docs/EVALUATION.md#recovery-boundaries) before live tuning.
+
+## Measured comparisons
+
+`scripts/run_evaluation.py` compares fixed configurations or adaptive model
+inference against the captured baseline. Model mode includes a random-action
+baseline. It randomises trial order, repeats measurements, and saves raw JSONL
+and a JSON summary with variability and paired bootstrap intervals. Dry-run reports are
+explicitly synthetic. Follow the [evaluation procedure](docs/EVALUATION.md) to
+compare configurations selected by sweeps, random search, or training across
+CPU, memory, mixed-load, and latency benchmark adapters. Read-only compatibility
+checks are available through `scripts/check_host.py` and opt-in host tests.
+
+Historical hardcoded slide figures are unverified examples, not evidence of
+measured gains. Existing binary presentations have not been regenerated. The
+maintained v7–v9 templates disclose illustrative comparison data and mark
+unmeasured overhead/stability claims as pending.
+
+## Tests
+
+```bash
+python -m pytest tests/ -q
+```
+
+Tests cover monitoring, storage, scheduler control, RL integration, training,
+workload selection, sweeps, evaluation, partial writes, failed restoration,
+interruption cleanup, and checkpoint recovery using fake backends.
+Passing these tests does not establish real workload improvements.
 
 ---
 

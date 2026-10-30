@@ -21,6 +21,8 @@ class ProcessInfo:
     utime: int          # user-mode ticks
     stime: int          # kernel-mode ticks
     num_threads: int
+    starttime: int | None = None  # /proc start ticks distinguish reused PIDs
+    cpu_ticks_delta: int | None = None  # interval ticks; None for legacy samples
 
 
 @dataclass(frozen=True)
@@ -60,8 +62,8 @@ class SystemSnapshot:
     # NUMA — empty tuple if no NUMA topology exposed
     numa_nodes: tuple[str, ...] = field(default_factory=tuple)
 
-    # A capped sample of processes (not every process, every snapshot — that's
-    # expensive; sample size is a Monitor config knob)
+    # A capped sample ranked by recent CPU activity. The source scans process
+    # counters before selecting this sample; cost scales with process count.
     processes: tuple[ProcessInfo, ...] = field(default_factory=tuple)
 
     # Which sources actually contributed to this snapshot — makes "None means

@@ -13,3 +13,7 @@ class WriteError(SchedulerError):
 
 class ReadbackError(SchedulerError):
     pass
+
+
+class RecoveryError(SchedulerError):
+    """Restoration failed; stop tuning and retain recovery state for retry."""

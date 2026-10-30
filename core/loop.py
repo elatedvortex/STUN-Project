@@ -87,28 +87,33 @@ class EpisodeRunner:
         if self._watchdog is not None:
             self._watchdog.start()
 
-        obs, _ = self._env.reset()
+        try:
+            obs, _ = self._env.reset()
 
-        total_reward = 0.0
-        steps = 0
-        rollbacks = 0
-        terminated = False
-        truncated = False
+            total_reward = 0.0
+            steps = 0
+            rollbacks = 0
+            terminated = False
+            truncated = False
 
-        while not (terminated or truncated):
-            action = self._agent.predict(obs)
-            obs, reward, terminated, truncated, info = self._env.step(action)
-            total_reward += reward
-            steps += 1
-            if info.get("rollback_triggered"):
-                rollbacks += 1
-            logger.debug(
-                "step=%d reward=%.4f rollback=%s",
-                steps, reward, info.get("rollback_triggered"),
-            )
+            while not (terminated or truncated):
+                action = self._agent.predict(obs)
+                obs, reward, terminated, truncated, info = self._env.step(action)
+                total_reward += reward
+                steps += 1
+                if info.get("rollback_triggered"):
+                    rollbacks += 1
+                logger.debug(
+                    "step=%d reward=%.4f rollback=%s",
+                    steps, reward, info.get("rollback_triggered"),
+                )
 
-        if self._watchdog is not None:
-            self._watchdog.stop()
+        finally:
+            try:
+                if self._watchdog is not None:
+                    self._watchdog.stop()
+            finally:
+                self._env.close()
 
         elapsed = time.monotonic() - t_start
         stats = {

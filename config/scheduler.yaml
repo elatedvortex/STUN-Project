@@ -9,19 +9,19 @@
 scheduler:
   params:
     # ── CFS granularity (used by RL training) ──────────────────────────
-    - name: sched_min_granularity_ns
-      path: kernel.sched_min_granularity_ns
-      type: int
-      min_value: 100000
-      max_value: 100000000
-      description: CFS minimum preemption granularity (ns)
+    # - name: sched_min_granularity_ns
+    #   path: kernel.sched_min_granularity_ns
+    #   type: int
+    #   min_value: 100000
+    #   max_value: 100000000
+    #   description: CFS minimum preemption granularity (ns)
 
-    - name: sched_wakeup_granularity_ns
-      path: kernel.sched_wakeup_granularity_ns
-      type: int
-      min_value: 100000
-      max_value: 100000000
-      description: CFS wakeup granularity (ns)
+    # - name: sched_wakeup_granularity_ns
+    #   path: kernel.sched_wakeup_granularity_ns
+    #   type: int
+    #   min_value: 100000
+    #   max_value: 100000000
+    #   description: CFS wakeup granularity (ns)
 
     # ── Round-Robin / RT scheduling ────────────────────────────────────
     - name: sched_rr_timeslice_ms

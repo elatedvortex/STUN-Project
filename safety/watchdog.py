@@ -17,14 +17,22 @@ class Watchdog:
     def __init__(self, rollback_callback: Callable[[], None], timeout_sec: float = 10.0):
         self.rollback_callback = rollback_callback
         self.timeout_sec = timeout_sec
+        if timeout_sec <= 0:
+            raise ValueError("timeout_sec must be positive")
         self._lock = threading.Lock()
-        self._last_ping = time.time()
+        self._last_ping = time.monotonic()
+        self._timed_out = False
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
     def ping(self) -> None:
         with self._lock:
-            self._last_ping = time.time()
+            self._last_ping = time.monotonic()
+
+    @property
+    def timed_out(self) -> bool:
+        with self._lock:
+            return self._timed_out
 
     @property
     def running(self) -> bool:
@@ -36,7 +44,8 @@ class Watchdog:
             if self._running:
                 return
             self._running = True
-            self._last_ping = time.time()
+            self._timed_out = False
+            self._last_ping = time.monotonic()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -51,7 +60,9 @@ class Watchdog:
             with self._lock:
                 if not self._running:
                     break
-                elapsed = time.time() - self._last_ping
+                elapsed = time.monotonic() - self._last_ping
+                if elapsed > self.timeout_sec:
+                    self._timed_out = True
             if elapsed > self.timeout_sec:
                 logger.error(
                     "Watchdog timeout (%ss)! Forcing rollback.", self.timeout_sec,

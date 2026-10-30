@@ -247,19 +247,23 @@ QGroupBox {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
     border-radius: 12px;
-    margin-top: 14px;
-    padding: 16px;
+    margin-top: 20px;
+    padding: 20px 16px 14px 16px;
     font-weight: 600;
-    color: {TEXT_SEC};
+    color: {TEXT_PRI};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 16px;
+    left: 14px;
     top: -10px;
-    color: {TEXT_SEC};
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
+    padding: 2px 10px;
+    color: {ACCENT};
+    background: {BG_DEEP};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
 }}
 
 /* ── Tool tip ───────────────────────────────────────────── */

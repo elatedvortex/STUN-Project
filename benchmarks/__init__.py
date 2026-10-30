@@ -5,7 +5,8 @@ from benchmarks.adapters import (
     SysbenchAdapter,
     HackbenchAdapter,
     CyclictestAdapter,
-    FioAdapter
+    FioAdapter,
+    GamingAdapter,
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "SysbenchAdapter",
     "HackbenchAdapter",
     "CyclictestAdapter",
-    "FioAdapter"
+    "FioAdapter",
+    "GamingAdapter",
 ]
