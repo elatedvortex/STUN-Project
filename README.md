@@ -93,6 +93,10 @@ pip install PyQt6 pyqtgraph
 ```bash
 python3 dashboard/app.py
 ```
+Use the **White** and **Black** buttons in the top-right corner to change the
+dashboard theme immediately. The selection is remembered for the next launch
+and is also available under **Settings → Appearance**.
+
 *Note: The new Auto-Tuner & Sweep panel is available in the dashboard. Use it to run coordinate descent parameter sweeps and view real-time training score curves.*
 
 ### 3. Run the Live Tuner Daemon (Headless)

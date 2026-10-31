@@ -1,5 +1,5 @@
 """
-dashboard/theme.py — Centralised dark theme palette + Qt stylesheet.
+dashboard/theme.py — Centralised light/dark palettes, Qt styles, and live widget updates.
 
 All colours are defined once here; every widget imports from this module
 rather than scattering hex literals across the codebase.
@@ -284,3 +284,126 @@ QStatusBar {{
     font-size: 12px;
 }}
 """
+
+
+# Keep semantic chart colours stable when switching modes.
+_DARK = {key: globals()[key] for key in (
+    "BG_DEEP", "BG_CARD", "BG_HOVER", "BORDER", "ACCENT", "ACCENT2",
+    "WARN", "DANGER", "TEXT_PRI", "TEXT_SEC", "TEXT_DIM",
+)}
+_LIGHT = {**_DARK, "BG_DEEP": "#f4f6fb", "BG_CARD": "#ffffff",
+          "BG_HOVER": "#e8edf6", "BORDER": "#cbd5e1",
+          "TEXT_PRI": "#111827", "TEXT_SEC": "#475569", "TEXT_DIM": "#64748b"}
+_PALETTES = {"dark": _DARK, "light": _LIGHT}
+_BASE_STYLESHEET = STYLESHEET
+current_theme = "dark"
+
+
+def recolor_stylesheet(stylesheet, old, new):
+    """Update inline styles without rebuilding panels or losing their state."""
+    import re
+    colors = {value.lower(): new[key] for key, value in old.items()}
+
+    def replace(match):
+        base, alpha = match.group(1).lower(), match.group(2) or ""
+        # White foregrounds on accent buttons are deliberate in both modes.
+        prefix = stylesheet[:match.start()].rsplit(";", 1)[-1].rsplit("{", 1)[-1]
+        if base == "#ffffff" and re.search(r"(?<![-\w])color\s*:\s*$", prefix):
+            return match.group(0)
+        return colors.get(base, base) + alpha
+
+    return re.sub(r"(#[0-9a-fA-F]{6})([0-9a-fA-F]{2})?(?![0-9a-fA-F])", replace, stylesheet)
+
+
+def set_theme(name):
+    global current_theme, PG_BG, STYLESHEET
+    if name not in _PALETTES:
+        raise ValueError("Theme must be light or dark")
+    globals().update(_PALETTES[name])
+    current_theme = name
+    PG_BG = BG_CARD
+    STYLESHEET = recolor_stylesheet(_BASE_STYLESHEET, _DARK, _PALETTES[name])
+    STYLESHEET += f"""
+QPushButton:checked {{ background: {ACCENT}; color: #ffffff; border-color: {ACCENT}; }}
+QComboBox QAbstractItemView {{ background: {BG_CARD}; color: {TEXT_PRI};
+    selection-background-color: {ACCENT}; selection-color: #ffffff; }}
+QTextEdit, QPlainTextEdit {{ background: {BG_CARD}; color: {TEXT_PRI}; }}
+"""
+
+
+def resolve_color(color):
+    """Resolve legacy colour constants that were captured at module import."""
+    return {_DARK[key]: value for key, value in _PALETTES[current_theme].items()}.get(color, color)
+
+
+def apply_to_window(window, name):
+    """Repaint the existing widget tree and plots; keep workers and data intact."""
+    import re
+    import pyqtgraph as pg
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QColor, QBrush, QPalette
+    from PyQt6.QtWidgets import QApplication, QWidget, QTableWidget, QListWidget, QTextEdit
+
+    old = dict(_PALETTES[current_theme])
+    set_theme(name)
+    new = _PALETTES[name]
+    color_map = {value: new[key] for key, value in old.items()}
+    app = QApplication.instance()
+    palette = QPalette()
+    for role, color in {
+        QPalette.ColorRole.Window: BG_DEEP, QPalette.ColorRole.WindowText: TEXT_PRI,
+        QPalette.ColorRole.Base: BG_CARD, QPalette.ColorRole.AlternateBase: BG_DEEP,
+        QPalette.ColorRole.Text: TEXT_PRI, QPalette.ColorRole.Button: BG_HOVER,
+        QPalette.ColorRole.ButtonText: TEXT_PRI, QPalette.ColorRole.Highlight: ACCENT,
+        QPalette.ColorRole.HighlightedText: "#ffffff", QPalette.ColorRole.ToolTipBase: BG_CARD,
+        QPalette.ColorRole.ToolTipText: TEXT_PRI, QPalette.ColorRole.PlaceholderText: TEXT_DIM,
+    }.items():
+        palette.setColor(role, QColor(color))
+    app.setPalette(palette)
+    pg.setConfigOption("background", PG_BG)
+    pg.setConfigOption("foreground", TEXT_SEC)
+
+    def recolor_item(item):
+        if item is None:
+            return
+        brush = item.foreground()
+        if brush.style() != Qt.BrushStyle.NoBrush:
+            mapped = color_map.get(brush.color().name())
+            if mapped:
+                item.setForeground(QBrush(QColor(mapped)))
+
+    for widget in [window, *window.findChildren(QWidget)]:
+        css = widget.styleSheet()
+        if css:
+            widget.setStyleSheet(recolor_stylesheet(css, old, new))
+        if isinstance(widget, pg.PlotWidget):
+            widget.setBackground(PG_BG)
+            plot = widget.getPlotItem()
+            for axis_info in plot.axes.values():
+                axis = axis_info["item"]
+                axis.setPen(pg.mkPen(BORDER))
+                axis.setTextPen(pg.mkPen(TEXT_SEC))
+                if axis.labelText:
+                    axis.setLabel(axis.labelText, units=axis.labelUnits,
+                                  **{**axis.labelStyle, "color": TEXT_SEC})
+            if plot.titleLabel.text:
+                plot.setTitle(plot.titleLabel.text, color=TEXT_PRI)
+            if plot.legend:
+                for _, label in plot.legend.items:
+                    label.setText(label.text, color=TEXT_PRI)
+        if isinstance(widget, QTableWidget):
+            for row in range(widget.rowCount()):
+                for column in range(widget.columnCount()):
+                    recolor_item(widget.item(row, column))
+        if isinstance(widget, QListWidget):
+            for row in range(widget.count()):
+                recolor_item(widget.item(row))
+        if isinstance(widget, QTextEdit) and widget.isReadOnly():
+            scroll = widget.verticalScrollBar().value()
+            html = widget.toHtml()
+            html = re.sub(r'style="([^"]*)"',
+                          lambda match: 'style="' + recolor_stylesheet(match.group(1), old, new) + '"', html)
+            widget.setHtml(html)
+            widget.verticalScrollBar().setValue(scroll)
+        widget.update()
+    window.setStyleSheet(STYLESHEET)

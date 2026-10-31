@@ -274,7 +274,7 @@ class ProcessPanel(QWidget):
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 # State colour
-                state_color = _STATE_COLORS.get(state, theme.TEXT_SEC)
+                state_color = theme.resolve_color(_STATE_COLORS.get(state, theme.TEXT_SEC))
                 row[_STATE_COL].setForeground(QColor(state_color))
 
                 # High-CPU highlight

@@ -157,7 +157,7 @@ class LogViewerPanel(QWidget):
             msg = self._handler.format(record)
             if filter_text and filter_text not in msg.lower():
                 continue
-            color = self._LEVEL_COLORS.get(record.levelname, theme.TEXT_PRI)
+            color = theme.resolve_color(self._LEVEL_COLORS.get(record.levelname, theme.TEXT_PRI))
             # Escape HTML
             msg_esc = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             new_html.append(f'<span style="color:{color};">{msg_esc}</span>')

@@ -260,10 +260,12 @@ class SparklineChart(QWidget):
         self._plot_widget.setMinimumHeight(110)
 
         # Fill under the curve
+        fill = QColor(color)
+        fill.setAlpha(36)
         self._curve = self._plot_widget.plot(
             pen=pg.mkPen(color=color, width=2),
             fillLevel=0,
-            brush=pg.mkBrush(QColor(color).darker(350)),
+            brush=pg.mkBrush(fill),
         )
 
         layout.addWidget(self._plot_widget)

@@ -6,7 +6,7 @@ Provides controls for:
   - Checkpoint directory path
   - DB path
   - Monitor polling frequency
-  - Theme preference toggle (future)
+  - White / black theme preference (also available in the header)
 """
 from __future__ import annotations
 import json
@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea,
     QSpinBox, QVBoxLayout, QWidget,
 )
@@ -30,6 +30,7 @@ _DEFAULTS = {
     "log_max_lines":       5000,
     "training_timesteps":  50000,
     "training_checkpoint_freq": 5000,
+    "theme": "dark",
 }
 
 
@@ -76,6 +77,15 @@ class SettingsPanel(QWidget):
         scroll_w.setStyleSheet("background: transparent;")
         scroll_lay = QVBoxLayout(scroll_w)
         scroll_lay.setSpacing(16)
+
+        appearance = QGroupBox("Appearance")
+        appearance_layout = QFormLayout(appearance)
+        self._cmb_theme = QComboBox()
+        self._cmb_theme.addItem("White (light)", "light")
+        self._cmb_theme.addItem("Black (dark)", "dark")
+        self.set_theme_preference(self._settings.get("theme", "dark"))
+        appearance_layout.addRow("Theme:", self._cmb_theme)
+        scroll_lay.addWidget(appearance)
 
         # ── Paths ──────────────────────────────────────────────────────────
         paths_grp = QGroupBox("Paths")
@@ -173,13 +183,20 @@ class SettingsPanel(QWidget):
 
     def _collect(self) -> dict:
         return {
+            **load_settings(),
             "checkpoint_dir":            self._inp_ckpt_dir.text().strip(),
             "db_path":                   self._inp_db.text().strip(),
             "monitor_interval_ms":       self._spin_interval.value(),
             "log_max_lines":             self._spin_log_lines.value(),
             "training_timesteps":        self._spin_timesteps.value(),
             "training_checkpoint_freq":  self._spin_ckpt_freq.value(),
+            "theme":                     self._cmb_theme.currentData(),
         }
+
+    def set_theme_preference(self, name: str) -> None:
+        index = self._cmb_theme.findData(name)
+        self._cmb_theme.setCurrentIndex(index if index >= 0 else self._cmb_theme.findData("dark"))
+        self._settings["theme"] = self._cmb_theme.currentData()
 
     def _save(self) -> None:
         s = self._collect()
@@ -190,6 +207,7 @@ class SettingsPanel(QWidget):
 
     def _reset(self) -> None:
         s = dict(_DEFAULTS)
+        self.set_theme_preference(s["theme"])
         self._inp_ckpt_dir.setText(s["checkpoint_dir"])
         self._inp_db.setText(s["db_path"])
         self._spin_interval.setValue(s["monitor_interval_ms"])

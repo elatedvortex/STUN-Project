@@ -27,12 +27,12 @@ import sys
 import logging
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QPushButton, QSizePolicy, QStatusBar, QStackedWidget,
-    QVBoxLayout, QWidget, QListWidget, QListWidgetItem, QSplitter,
+    QVBoxLayout, QWidget, QListWidget, QListWidgetItem, QSplitter, QButtonGroup,
 )
 
 from dashboard import theme
@@ -47,7 +47,7 @@ from dashboard.panels.experiment_history  import ExperimentHistoryPanel
 from dashboard.panels.evaluation          import EvaluationPanel
 from dashboard.panels.safety_panel        import SafetyPanel
 from dashboard.panels.log_viewer          import LogViewerPanel
-from dashboard.panels.settings_panel      import SettingsPanel
+from dashboard.panels.settings_panel      import SettingsPanel, load_settings, save_settings
 from dashboard.panels.overview            import OverviewPanel
 from dashboard.panels.processes           import ProcessPanel
 from dashboard.panels.memory              import MemoryPanel
@@ -85,6 +85,8 @@ def _sidebar_section(text: str) -> QListWidgetItem:
 # ── Header bar ───────────────────────────────────────────────────────────────
 
 class _HeaderBar(QWidget):
+    theme_requested = pyqtSignal(str)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedHeight(52)
@@ -133,6 +135,27 @@ class _HeaderBar(QWidget):
         layout.addWidget(self._lbl_mem)
         layout.addWidget(self._lbl_load)
         layout.addStretch()
+        self.btn_light = QPushButton("☀ White")
+        self.btn_dark = QPushButton("☾ Black")
+        self._theme_buttons = QButtonGroup(self)
+        for button_id, (button, name) in enumerate(((self.btn_light, "light"), (self.btn_dark, "dark"))):
+            button.setCheckable(True)
+            button.setChecked(theme.current_theme == name)
+            button.setObjectName(f"theme_{name}")
+            button.setAccessibleName(f"Switch to {name} theme")
+            button.setToolTip(f"Use the {'white' if name == 'light' else 'black'} dashboard theme")
+            button.setFixedWidth(88)
+            button.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {theme.TEXT_SEC};
+                    border: 1px solid {theme.BORDER}; border-radius: 7px; padding: 6px 10px; }}
+                QPushButton:hover {{ background: {theme.BG_HOVER}; color: {theme.TEXT_PRI}; }}
+                QPushButton:checked {{ background: {theme.ACCENT}; color: #fff;
+                    border-color: {theme.ACCENT}; }}
+            """)
+            self._theme_buttons.addButton(button, button_id)
+            layout.addWidget(button)
+        self._theme_buttons.idClicked.connect(
+            lambda button_id: self.theme_requested.emit("light" if button_id == 0 else "dark"))
         layout.addWidget(self._badge)
         layout.addWidget(self._btn_pause)
 
@@ -202,6 +225,8 @@ class MainWindow(QMainWindow):
         interval_ms: int = 1000,
     ) -> None:
         super().__init__()
+        preference = load_settings().get("theme", "dark")
+        theme.set_theme(preference if preference in ("light", "dark") else "dark")
         self._paused = False
         self._tick   = 0
 
@@ -218,6 +243,7 @@ class MainWindow(QMainWindow):
         # Header
         self._header = _HeaderBar()
         self._header.btn_pause.clicked.connect(self._toggle_pause)
+        self._header.theme_requested.connect(self._set_theme)
         root.addWidget(self._header)
 
         # Splitter (sidebar + content)
@@ -361,6 +387,21 @@ class MainWindow(QMainWindow):
 
         # Navigate to MLOps Overview on startup
         self._navigate_to("Overview")
+        self._set_theme(theme.current_theme, persist=False)
+
+    def _set_theme(self, name: str, *, persist: bool = True) -> None:
+        theme.apply_to_window(self, name)
+        self._header.btn_light.setChecked(name == "light")
+        self._header.btn_dark.setChecked(name == "dark")
+        self._p_settings.set_theme_preference(name)
+        if persist:
+            settings = load_settings()
+            settings["theme"] = name
+            try:
+                save_settings(settings)
+            except OSError:
+                logger.warning("Theme changed but the preference could not be saved", exc_info=True)
+                self.statusBar().showMessage("Theme changed; preference could not be saved.", 5000)
 
     # ── Sidebar navigation ────────────────────────────────────────────────
 
@@ -402,6 +443,7 @@ class MainWindow(QMainWindow):
         self._navigate_to("Live Training")
 
     def _on_settings_changed(self, settings: dict) -> None:
+        self._set_theme(settings.get("theme", "dark"), persist=False)
         ckpt_dir = settings.get("checkpoint_dir", "data/checkpoints")
         self._p_checkpoints.set_checkpoint_dir(ckpt_dir)
         from pathlib import Path

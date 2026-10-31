@@ -30,6 +30,30 @@ sys.excepthook = lambda kind, value, tb: errors.append(str(value))
 app = QApplication([])
 registry = build_registry_from_config(sys.argv[1] + '/config/scheduler.yaml')
 window = MainWindow(registry, controller=None, interval_ms=100)
+from dashboard import theme
+from dashboard.panels.settings_panel import load_settings
+from PyQt6.QtGui import QPalette
+import pyqtgraph as pg
+worker = window._worker
+plot = window.findChildren(pg.PlotWidget)[0]
+curve = plot.plot([1, 2, 3])
+window._p_settings._inp_db.setText('pending-unsaved.db')
+window._header.btn_light.click()
+assert theme.current_theme == 'light'
+assert window._header.btn_light.isChecked()
+assert not window._header.btn_dark.isChecked()
+assert load_settings()['theme'] == 'light'
+assert app.palette().color(QPalette.ColorRole.Window).name() == theme.BG_DEEP
+assert plot.backgroundBrush().color().name() == theme.PG_BG
+assert curve.yData.tolist() == [1, 2, 3]
+assert window._worker is worker
+assert window._p_settings._inp_db.text() == 'pending-unsaved.db'
+window._header.btn_dark.click()
+assert theme.current_theme == 'dark'
+assert window._header.btn_dark.isChecked()
+assert plot.backgroundBrush().color().name() == theme.PG_BG
+assert curve.yData.tolist() == [1, 2, 3]
+window._header.btn_light.click()
 seen = []
 window._worker.snapshot_ready.connect(lambda snapshot: seen.append(snapshot))
 window.show()
@@ -40,6 +64,12 @@ QTimer.singleShot(750, finish)
 app.exec()
 assert seen, 'no monitor snapshots received'
 assert not window._worker.isRunning(), 'monitor thread survived window close'
+# Construct a new window to verify that startup uses the saved preference.
+reopened = MainWindow(registry, controller=None, interval_ms=100)
+assert theme.current_theme == 'light'
+assert reopened._header.btn_light.isChecked()
+assert reopened._p_settings._cmb_theme.currentData() == 'light'
+reopened.close()
 assert not errors, errors
 """
     result = subprocess.run(
